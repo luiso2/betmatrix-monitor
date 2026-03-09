@@ -156,7 +156,21 @@ async def main():
     bot_state["connected_as"] = f"{me.first_name} (@{me.username})"
     logger.info(f"Connected as: {me.first_name} (@{me.username})")
 
-    @client.on(events.NewMessage(chats=MONITOR_GROUP_ID))
+    # Cache all dialogs so Telethon knows about the group
+    logger.info("Loading dialogs to cache entities...")
+    target_chat = None
+    async for dialog in client.iter_dialogs():
+        if MONITOR_GROUP_NAME.lower() in dialog.name.lower() or dialog.id == abs(MONITOR_GROUP_ID):
+            target_chat = dialog.entity
+            logger.info(f"Found group: {dialog.name} (ID: {dialog.id})")
+            break
+
+    if not target_chat:
+        logger.error(f"Group '{MONITOR_GROUP_NAME}' not found in dialogs!")
+        await client.disconnect()
+        return
+
+    @client.on(events.NewMessage(chats=target_chat))
     async def handler(event):
         sender = await event.get_sender()
         sender_name = getattr(sender, "first_name", "Unknown")
