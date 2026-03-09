@@ -16,7 +16,8 @@ API_HASH = os.environ["TELEGRAM_API_HASH"]
 SESSION_STRING = os.environ["TELEGRAM_SESSION_STRING"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 JOSE_CHAT_ID = int(os.environ.get("JOSE_CHAT_ID", "6287853524"))
-MONITOR_GROUP = os.environ.get("MONITOR_GROUP", "Andrew Bot testing")
+MONITOR_GROUP_NAME = os.environ.get("MONITOR_GROUP", "Andrew Bot testing")
+MONITOR_GROUP_ID = int(os.environ.get("MONITOR_GROUP_ID", "-5220514827"))
 PORT = int(os.environ.get("PORT", 8080))
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -25,7 +26,7 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 bot_state = {
     "status": "starting",
     "connected_as": None,
-    "monitoring": MONITOR_GROUP,
+    "monitoring": MONITOR_GROUP_NAME,
     "messages_analyzed": 0,
     "started_at": datetime.utcnow().isoformat(),
     "last_message_at": None,
@@ -155,7 +156,7 @@ async def main():
     bot_state["connected_as"] = f"{me.first_name} (@{me.username})"
     logger.info(f"Connected as: {me.first_name} (@{me.username})")
 
-    @client.on(events.NewMessage(chats=MONITOR_GROUP))
+    @client.on(events.NewMessage(chats=MONITOR_GROUP_ID))
     async def handler(event):
         sender = await event.get_sender()
         sender_name = getattr(sender, "first_name", "Unknown")
@@ -184,7 +185,7 @@ async def main():
         await client.send_message(JOSE_CHAT_ID, notification, parse_mode="markdown")
         logger.info("Analysis sent to Jose")
 
-    logger.info(f"Monitoring group: '{MONITOR_GROUP}'")
+    logger.info(f"Monitoring group: '{MONITOR_GROUP_NAME}' (ID: {MONITOR_GROUP_ID})")
     logger.info("Waiting for messages...")
     await client.run_until_disconnected()
 
