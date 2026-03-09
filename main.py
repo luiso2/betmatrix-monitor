@@ -1,6 +1,8 @@
 import asyncio
 import os
 import logging
+from datetime import datetime
+from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from openai import OpenAI
@@ -15,8 +17,19 @@ SESSION_STRING = os.environ["TELEGRAM_SESSION_STRING"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 JOSE_CHAT_ID = int(os.environ.get("JOSE_CHAT_ID", "6287853524"))
 MONITOR_GROUP = os.environ.get("MONITOR_GROUP", "Andrew Bot testing")
+PORT = int(os.environ.get("PORT", 8080))
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Bot state
+bot_state = {
+    "status": "starting",
+    "connected_as": None,
+    "monitoring": MONITOR_GROUP,
+    "messages_analyzed": 0,
+    "started_at": datetime.utcnow().isoformat(),
+    "last_message_at": None,
+}
 
 SYSTEM_PROMPT = """Eres un asistente inteligente que monitorea el grupo de Telegram "Andrew Bot testing" del proyecto BetMatrix (Win Works Gaming).
 
@@ -78,17 +91,68 @@ async def analyze_message(sender_name: str, message_text: str) -> str:
             max_tokens=300,
             temperature=0.3,
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or "Sin análisis"
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
         return f"⚠️ Error al analizar: {e}"
 
 
+# --- HTTP Health Server ---
+async def handle_health(request):
+    return web.json_response({
+        "status": bot_state["status"],
+        "connected_as": bot_state["connected_as"],
+        "monitoring": bot_state["monitoring"],
+        "messages_analyzed": bot_state["messages_analyzed"],
+        "started_at": bot_state["started_at"],
+        "last_message_at": bot_state["last_message_at"],
+    })
+
+async def handle_root(request):
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>BetMatrix Monitor</title>
+    <style>body{{font-family:monospace;background:#0a0a0a;color:#D4A84B;padding:40px}}
+    h1{{color:#fff}} .ok{{color:#4ade80}} .tag{{background:#1a1a1a;padding:4px 10px;border-radius:4px;margin:4px 0;display:block}}</style>
+    </head>
+    <body>
+    <h1>🤖 BetMatrix Monitor</h1>
+    <p>Estado: <span class="ok">● {bot_state['status'].upper()}</span></p>
+    <span class="tag">👤 Conectado como: {bot_state['connected_as'] or 'conectando...'}</span>
+    <span class="tag">👁 Monitoreando: {bot_state['monitoring']}</span>
+    <span class="tag">📊 Mensajes analizados: {bot_state['messages_analyzed']}</span>
+    <span class="tag">🕐 Iniciado: {bot_state['started_at']}</span>
+    <span class="tag">💬 Último mensaje: {bot_state['last_message_at'] or 'ninguno aún'}</span>
+    <br><p><a href="/health" style="color:#D4A84B">GET /health → JSON</a></p>
+    </body></html>
+    """
+    return web.Response(text=html, content_type="text/html")
+
+async def start_http_server():
+    app = web.Application()
+    app.router.add_get("/", handle_root)
+    app.router.add_get("/health", handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"HTTP server running on port {PORT}")
+
+
+# --- Telegram Bot ---
 async def main():
     logger.info("Starting BetMatrix Monitor...")
+
+    # Start HTTP server first so Railway doesn't timeout
+    await start_http_server()
+    bot_state["status"] = "connecting"
+
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
     await client.start()
     me = await client.get_me()
+    bot_state["status"] = "running"
+    bot_state["connected_as"] = f"{me.first_name} (@{me.username})"
     logger.info(f"Connected as: {me.first_name} (@{me.username})")
 
     @client.on(events.NewMessage(chats=MONITOR_GROUP))
@@ -98,15 +162,14 @@ async def main():
         username = getattr(sender, "username", "")
         message_text = event.message.text or ""
 
-        # Ignore empty messages
         if not message_text.strip():
             return
-
-        # Ignore own messages
         if sender.id == JOSE_CHAT_ID:
             return
 
         logger.info(f"New message from {sender_name}: {message_text[:50]}")
+        bot_state["messages_analyzed"] += 1
+        bot_state["last_message_at"] = datetime.utcnow().isoformat()
 
         analysis = await analyze_message(sender_name, message_text)
 
@@ -119,10 +182,10 @@ async def main():
         )
 
         await client.send_message(JOSE_CHAT_ID, notification, parse_mode="markdown")
-        logger.info(f"Analysis sent to Jose")
+        logger.info("Analysis sent to Jose")
 
     logger.info(f"Monitoring group: '{MONITOR_GROUP}'")
-    logger.info("Waiting for messages... (Ctrl+C to stop)")
+    logger.info("Waiting for messages...")
     await client.run_until_disconnected()
 
 
